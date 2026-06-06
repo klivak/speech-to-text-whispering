@@ -58,6 +58,7 @@ enum UserEvent {
     TranscribeDone {
         result: Result<String, String>,
         audio_ms: u64,
+        limits: groq::Limits,
     },
 }
 
@@ -111,6 +112,8 @@ fn main() {
     );
 
     let stats_summary = MenuItem::new(usage.summary(), false, None);
+    let limits_summary = MenuItem::new(usage.limits_summary(), false, None);
+    let open_limits = MenuItem::new("Ліміти Groq (онлайн)…", true, None);
     let open_stats = MenuItem::new("Відкрити статистику", true, None);
 
     #[cfg(windows)]
@@ -129,6 +132,8 @@ fn main() {
         &mode_ptt,
         &PredefinedMenuItem::separator(),
         &stats_summary,
+        &limits_summary,
+        &open_limits,
         &open_stats,
         &PredefinedMenuItem::separator(),
         &get_key,
@@ -215,20 +220,27 @@ fn main() {
                                     let cfg2 = cfg.clone();
                                     let proxy = proxy.clone();
                                     std::thread::spawn(move || {
-                                        let result =
-                                            groq::transcribe(&cfg2, wav).and_then(|text| {
-                                                if text.is_empty() {
-                                                    return Ok(text);
-                                                }
-                                                paste::copy_to_clipboard(&text)?;
-                                                if cfg2.auto_paste {
-                                                    paste::paste_at_cursor()?;
-                                                }
-                                                Ok(text)
-                                            });
+                                        let (result, limits) = match groq::transcribe(&cfg2, wav) {
+                                            Ok((text, limits)) => {
+                                                let res = if text.is_empty() {
+                                                    Ok(text)
+                                                } else {
+                                                    paste::copy_to_clipboard(&text)
+                                                        .and_then(|()| {
+                                                            if cfg2.auto_paste {
+                                                                paste::paste_at_cursor()?;
+                                                            }
+                                                            Ok(text)
+                                                        })
+                                                };
+                                                (res, limits)
+                                            }
+                                            Err(e) => (Err(e), groq::Limits::default()),
+                                        };
                                         let _ = proxy.send_event(UserEvent::TranscribeDone {
                                             result,
                                             audio_ms,
+                                            limits,
                                         });
                                     });
                                 }
@@ -255,7 +267,11 @@ fn main() {
                     }
                 }
 
-                UserEvent::TranscribeDone { result, audio_ms } => {
+                UserEvent::TranscribeDone {
+                    result,
+                    audio_ms,
+                    limits,
+                } => {
                     match &result {
                         Ok(text) => {
                             eprintln!("OK: {text}");
@@ -266,10 +282,11 @@ fn main() {
                             state = State::Error;
                         }
                     }
-                    // Оновлюємо статистику.
-                    usage.record(&result, audio_ms);
+                    // Оновлюємо статистику й залишок лімітів.
+                    usage.record(&result, audio_ms, &limits);
                     usage.save();
                     stats_summary.set_text(usage.summary());
+                    limits_summary.set_text(usage.limits_summary());
                     set_state(&keep_tray, &icons, state, &cfg);
                 }
 
@@ -332,6 +349,8 @@ fn main() {
                         cfg.save();
                         action_hint.set_text(action_hint_text(&cfg));
                         set_state(&keep_tray, &icons, state, &cfg);
+                    } else if id == *open_limits.id() {
+                        open_url("https://console.groq.com/settings/limits");
                     } else if id == *open_stats.id() {
                         open_path(&Stats::path());
                     } else if id == *get_key.id() {

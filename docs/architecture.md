@@ -26,10 +26,10 @@
 | `config.rs` | Структура `Config`, читання/запис `%APPDATA%\whisper-uk\config.json`. |
 | `hotkey.rs` | Парсинг рядка `"Ctrl+Alt+Space"` → `global_hotkey::HotKey`. |
 | `audio.rs` | Запис мікрофона через `cpal` у моно-буфер `f32`, кодування у WAV (16-bit PCM) через `hound`. |
-| `groq.rs` | `multipart`-запит до Groq (`/openai/v1/audio/transcriptions`), повертає текст. |
+| `groq.rs` | `multipart`-запит до Groq (`/openai/v1/audio/transcriptions`); повертає текст + залишок rate-limit із заголовків `x-ratelimit-remaining-*` (`Limits`). |
 | `paste.rs` | Копіювання в буфер (`arboard`) та емуляція `Ctrl+V` (`enigo`). |
-| `autostart.rs` | Автозапуск через реєстр `HKCU\...\Run` (тільки Windows, через `reg.exe`). |
-| `stats.rs` | Лічильники використання Groq (`stats.json`): запити, слова, аудіо, денний лічильник по UTC-добі. |
+| `autostart.rs` | Автозапуск через реєстр `HKCU\...\Run` (тільки Windows). Пише напряму через Windows API (`winreg`), без запуску `reg.exe` — інакше безконсольний застосунок падав із `0xc0000142`. |
+| `stats.rs` | Лічильники використання Groq (`stats.json`): запити, слова, аудіо, денний лічильник по UTC-добі + останній відомий залишок лімітів (`last_limits`). |
 
 ## Потоки та події
 

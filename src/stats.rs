@@ -4,6 +4,7 @@
 //! Зберігається у `%APPDATA%\whisper-uk\stats.json`. Лічильник «сьогодні»
 //! рахується по UTC-добі (як і ліміти Groq), щоб орієнтуватись на rate-limit.
 
+use crate::groq::Limits;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -26,6 +27,9 @@ pub struct Stats {
     pub today_day: u64,
     /// Запитів за поточну UTC-добу.
     pub today_requests: u64,
+    /// Останній відомий залишок rate-limit (із заголовків відповіді Groq).
+    #[serde(default)]
+    pub last_limits: Limits,
 }
 
 /// Номер поточної UTC-доби (днів від епохи).
@@ -62,7 +66,7 @@ impl Stats {
     }
 
     /// Враховує один завершений виклик до Groq.
-    pub fn record(&mut self, result: &Result<String, String>, audio_ms: u64) {
+    pub fn record(&mut self, result: &Result<String, String>, audio_ms: u64, limits: &Limits) {
         let day = current_day();
         if day != self.today_day {
             self.today_day = day;
@@ -79,6 +83,10 @@ impl Stats {
             }
             Err(_) => self.failed += 1,
         }
+        // Залишок лімітів оновлюємо лише коли заголовки реально прийшли.
+        if limits.is_some() {
+            self.last_limits = limits.clone();
+        }
     }
 
     /// Короткий рядок для пункту меню.
@@ -87,5 +95,31 @@ impl Stats {
             "📊 {} запитів · {} слів · сьогодні {}",
             self.requests, self.total_words, self.today_requests
         )
+    }
+
+    /// Рядок про залишок ліміту Groq (або підказка, якщо ще немає даних).
+    pub fn limits_summary(&self) -> String {
+        let l = &self.last_limits;
+        if !l.is_some() {
+            return "⏳ Ліміт: ще немає даних (зроби запис)".to_string();
+        }
+        let mut parts = Vec::new();
+        if let Some(rem) = &l.remaining_audio_seconds {
+            match &l.limit_audio_seconds {
+                Some(lim) => parts.push(format!("🎙 аудіо: {rem}/{lim} с")),
+                None => parts.push(format!("🎙 аудіо: {rem} с")),
+            }
+        }
+        if let Some(rem) = &l.remaining_requests {
+            match &l.limit_requests {
+                Some(lim) => parts.push(format!("запити: {rem}/{lim}")),
+                None => parts.push(format!("запити: {rem}")),
+            }
+        }
+        if parts.is_empty() {
+            "⏳ Ліміт: ще немає даних (зроби запис)".to_string()
+        } else {
+            format!("⚡ Лишилось — {}", parts.join(" · "))
+        }
     }
 }
