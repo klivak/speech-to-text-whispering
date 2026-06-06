@@ -67,15 +67,21 @@ impl Recording {
         })
     }
 
-    /// Зупиняє запис і повертає WAV-байти (16-bit PCM, моно).
-    pub fn stop_to_wav(self) -> Result<Vec<u8>, String> {
+    /// Зупиняє запис і повертає WAV-байти (16-bit PCM, моно) та тривалість у мс.
+    pub fn stop_to_wav(self) -> Result<(Vec<u8>, u64), String> {
         drop(self.stream); // зупиняє захоплення
         let samples = self
             .samples
             .lock()
             .map_err(|_| "mutex poisoned".to_string())?
             .clone();
-        encode_wav(&samples, self.sample_rate)
+        let duration_ms = if self.sample_rate > 0 {
+            samples.len() as u64 * 1000 / self.sample_rate as u64
+        } else {
+            0
+        };
+        let wav = encode_wav(&samples, self.sample_rate)?;
+        Ok((wav, duration_ms))
     }
 }
 

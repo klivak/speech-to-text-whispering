@@ -1,6 +1,6 @@
 [package]
 name = "whisper-uk"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Мінімальний голосовий ввід українською (Groq Whisper) зі вставкою в курсор"
 

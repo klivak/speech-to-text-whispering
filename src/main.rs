@@ -19,15 +19,28 @@ mod config;
 mod groq;
 mod hotkey;
 mod paste;
+mod stats;
 
 use audio::Recording;
 use config::{Config, HotkeyMode};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+use stats::Stats;
+use std::path::Path;
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::{
-    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
     Icon, TrayIconBuilder,
 };
+
+/// Готові варіанти хоткеїв для швидкого вибору в меню.
+const HOTKEY_PRESETS: &[&str] = &[
+    "Ctrl+Alt+Space",
+    "Ctrl+Shift+Space",
+    "Ctrl+Shift+D",
+    "Alt+Backquote",
+    "F9",
+    "F8",
+];
 
 /// Стан застосунку (визначає колір іконки трея).
 #[derive(Clone, Copy, PartialEq)]
@@ -42,25 +55,52 @@ enum State {
 enum UserEvent {
     Hotkey(GlobalHotKeyEvent),
     Menu(tray_icon::menu::MenuId),
-    TranscribeDone(Result<String, String>),
+    TranscribeDone {
+        result: Result<String, String>,
+        audio_ms: u64,
+    },
 }
 
 fn main() {
     let mut cfg = Config::load_or_create();
+    let mut usage = Stats::load();
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
     // --- Реєстрація глобального хоткея ---
     let hk_manager = GlobalHotKeyManager::new().expect("GlobalHotKeyManager");
-    let mut current_hotkey =
-        hotkey::parse(&cfg.hotkey).unwrap_or_else(|e| panic!("Хибний хоткей: {e}"));
-    hk_manager
-        .register(current_hotkey)
-        .expect("register hotkey");
+    // Якщо хоткей із конфігу хибний — відкочуємось на дефолтний, не падаючи.
+    let mut current_hotkey = hotkey::parse(&cfg.hotkey).unwrap_or_else(|e| {
+        eprintln!("Хибний хоткей '{}' ({e}); беру Ctrl+Alt+Space", cfg.hotkey);
+        cfg.hotkey = "Ctrl+Alt+Space".to_string();
+        hotkey::parse(&cfg.hotkey).expect("дефолтний хоткей валідний")
+    });
+    // Реєстрація може не вдатись (хоткей зайнятий іншою програмою) — не панікуємо:
+    // застосунок усе одно запуститься, користувач обере інший хоткей у меню.
+    if hk_manager.register(current_hotkey).is_err() {
+        eprintln!(
+            "Хоткей {} зайнятий іншою програмою — обери інший у меню «Хоткей»",
+            cfg.hotkey
+        );
+    }
 
     // --- Меню трея ---
     let menu = Menu::new();
+
+    // Рядок-підказка: що саме натискати/тримати (оновлюється при зміні).
+    let action_hint = MenuItem::new(action_hint_text(&cfg), false, None);
+
+    // Підменю вибору хоткея з готовими комбінаціями.
+    let hotkey_menu = Submenu::new("Хоткей", true);
+    let hotkey_items: Vec<CheckMenuItem> = HOTKEY_PRESETS
+        .iter()
+        .map(|&spec| CheckMenuItem::new(spec, true, spec.eq_ignore_ascii_case(&cfg.hotkey), None))
+        .collect();
+    for it in &hotkey_items {
+        hotkey_menu.append(it).expect("hotkey item");
+    }
+
     let mode_toggle =
         CheckMenuItem::new("Режим: Toggle", true, cfg.mode == HotkeyMode::Toggle, None);
     let mode_ptt = CheckMenuItem::new(
@@ -69,6 +109,10 @@ fn main() {
         cfg.mode == HotkeyMode::PushToTalk,
         None,
     );
+
+    let stats_summary = MenuItem::new(usage.summary(), false, None);
+    let open_stats = MenuItem::new("Відкрити статистику", true, None);
+
     #[cfg(windows)]
     let autostart_item =
         CheckMenuItem::new("Запускати з Windows", true, autostart::is_enabled(), None);
@@ -76,9 +120,16 @@ fn main() {
     let open_cfg = MenuItem::new("Відкрити config.json", true, None);
     let reload_cfg = MenuItem::new("Перезавантажити конфіг", true, None);
     let quit = MenuItem::new("Вийти", true, None);
+
     menu.append_items(&[
+        &action_hint,
+        &PredefinedMenuItem::separator(),
+        &hotkey_menu,
         &mode_toggle,
         &mode_ptt,
+        &PredefinedMenuItem::separator(),
+        &stats_summary,
+        &open_stats,
         &PredefinedMenuItem::separator(),
         &get_key,
         &open_cfg,
@@ -160,21 +211,25 @@ fn main() {
                             state = State::Transcribing;
                             set_state(&keep_tray, &icons, state, &cfg);
                             match rec.stop_to_wav() {
-                                Ok(wav) => {
+                                Ok((wav, audio_ms)) => {
                                     let cfg2 = cfg.clone();
                                     let proxy = proxy.clone();
                                     std::thread::spawn(move || {
-                                        let res = groq::transcribe(&cfg2, wav).and_then(|text| {
-                                            if text.is_empty() {
-                                                return Ok(text);
-                                            }
-                                            paste::copy_to_clipboard(&text)?;
-                                            if cfg2.auto_paste {
-                                                paste::paste_at_cursor()?;
-                                            }
-                                            Ok(text)
+                                        let result =
+                                            groq::transcribe(&cfg2, wav).and_then(|text| {
+                                                if text.is_empty() {
+                                                    return Ok(text);
+                                                }
+                                                paste::copy_to_clipboard(&text)?;
+                                                if cfg2.auto_paste {
+                                                    paste::paste_at_cursor()?;
+                                                }
+                                                Ok(text)
+                                            });
+                                        let _ = proxy.send_event(UserEvent::TranscribeDone {
+                                            result,
+                                            audio_ms,
                                         });
-                                        let _ = proxy.send_event(UserEvent::TranscribeDone(res));
                                     });
                                 }
                                 Err(e) => {
@@ -200,8 +255,8 @@ fn main() {
                     }
                 }
 
-                UserEvent::TranscribeDone(res) => {
-                    match res {
+                UserEvent::TranscribeDone { result, audio_ms } => {
+                    match &result {
                         Ok(text) => {
                             eprintln!("OK: {text}");
                             state = State::Idle;
@@ -211,12 +266,42 @@ fn main() {
                             state = State::Error;
                         }
                     }
+                    // Оновлюємо статистику.
+                    usage.record(&result, audio_ms);
+                    usage.save();
+                    stats_summary.set_text(usage.summary());
                     set_state(&keep_tray, &icons, state, &cfg);
                 }
 
                 UserEvent::Menu(id) => {
+                    let mut handled = false;
+
+                    // 1) Вибір хоткея з підменю.
+                    for (i, it) in hotkey_items.iter().enumerate() {
+                        if id == *it.id() {
+                            let spec = HOTKEY_PRESETS[i];
+                            if let Ok(new_hk) = hotkey::parse(spec) {
+                                let _ = hk_manager.unregister(current_hotkey);
+                                if hk_manager.register(new_hk).is_ok() {
+                                    current_hotkey = new_hk;
+                                    cfg.hotkey = spec.to_string();
+                                    cfg.save();
+                                } else {
+                                    // Відкат, якщо нова комбінація зайнята.
+                                    let _ = hk_manager.register(current_hotkey);
+                                }
+                            }
+                            sync_hotkey_checks(&hotkey_items, &cfg.hotkey);
+                            action_hint.set_text(action_hint_text(&cfg));
+                            set_state(&keep_tray, &icons, state, &cfg);
+                            handled = true;
+                            break;
+                        }
+                    }
+
+                    // 2) Автозапуск (тільки Windows).
                     #[cfg(windows)]
-                    if id == *autostart_item.id() {
+                    if !handled && id == *autostart_item.id() {
                         match autostart::toggle() {
                             Ok(enabled) => autostart_item.set_checked(enabled),
                             Err(e) => {
@@ -224,6 +309,11 @@ fn main() {
                                 autostart_item.set_checked(autostart::is_enabled());
                             }
                         }
+                        handled = true;
+                    }
+
+                    if handled {
+                        return;
                     }
 
                     if id == *quit.id() {
@@ -233,17 +323,21 @@ fn main() {
                         mode_toggle.set_checked(true);
                         mode_ptt.set_checked(false);
                         cfg.save();
+                        action_hint.set_text(action_hint_text(&cfg));
                         set_state(&keep_tray, &icons, state, &cfg);
                     } else if id == *mode_ptt.id() {
                         cfg.mode = HotkeyMode::PushToTalk;
                         mode_ptt.set_checked(true);
                         mode_toggle.set_checked(false);
                         cfg.save();
+                        action_hint.set_text(action_hint_text(&cfg));
                         set_state(&keep_tray, &icons, state, &cfg);
+                    } else if id == *open_stats.id() {
+                        open_path(&Stats::path());
                     } else if id == *get_key.id() {
                         open_url("https://console.groq.com/keys");
                     } else if id == *open_cfg.id() {
-                        open_config_file();
+                        open_path(&Config::path());
                     } else if id == *reload_cfg.id() {
                         let new_cfg = Config::load_or_create();
                         // Перереєстровуємо хоткей, якщо змінився.
@@ -258,6 +352,8 @@ fn main() {
                         cfg = new_cfg;
                         mode_toggle.set_checked(cfg.mode == HotkeyMode::Toggle);
                         mode_ptt.set_checked(cfg.mode == HotkeyMode::PushToTalk);
+                        sync_hotkey_checks(&hotkey_items, &cfg.hotkey);
+                        action_hint.set_text(action_hint_text(&cfg));
                         state = State::Idle;
                         set_state(&keep_tray, &icons, state, &cfg);
                     }
@@ -265,6 +361,22 @@ fn main() {
             }
         }
     });
+}
+
+/// Рядок-підказка: дієслово (натисни/тримай) + поточний хоткей.
+fn action_hint_text(cfg: &Config) -> String {
+    let verb = match cfg.mode {
+        HotkeyMode::Toggle => "Натисни",
+        HotkeyMode::PushToTalk => "Тримай",
+    };
+    format!("▶ {verb}: {}", cfg.hotkey)
+}
+
+/// Ставить галочку лише на тому пресеті, що збігається з поточним хоткеєм.
+fn sync_hotkey_checks(items: &[CheckMenuItem], current: &str) {
+    for (it, &spec) in items.iter().zip(HOTKEY_PRESETS) {
+        it.set_checked(spec.eq_ignore_ascii_case(current));
+    }
 }
 
 /// Підказка (tooltip) для іконки трея.
@@ -275,25 +387,21 @@ fn tooltip(state: State, cfg: &Config) -> String {
         State::Transcribing => "⏳ розпізнавання…",
         State::Error => "⚠ помилка (див. config / ключ)",
     };
-    let mode = match cfg.mode {
-        HotkeyMode::Toggle => "toggle",
-        HotkeyMode::PushToTalk => "push-to-talk",
-    };
-    format!("whisper-uk — {st}\nХоткей: {} ({mode})", cfg.hotkey)
+    format!("whisper-uk — {st}\n{}", action_hint_text(cfg))
 }
 
-/// Відкриває config.json у редакторі за замовчуванням.
-fn open_config_file() {
-    let path = Config::path();
+/// Відкриває файл/шлях у застосунку за замовчуванням.
+fn open_path(path: &Path) {
+    let p = path.to_string_lossy().to_string();
     #[cfg(windows)]
     {
         let _ = std::process::Command::new("cmd")
-            .args(["/C", "start", "", &path.to_string_lossy()])
+            .args(["/C", "start", "", &p])
             .spawn();
     }
     #[cfg(not(windows))]
     {
-        let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+        let _ = std::process::Command::new("xdg-open").arg(&p).spawn();
     }
 }
 
