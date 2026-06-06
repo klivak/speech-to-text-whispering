@@ -29,6 +29,7 @@
 | `groq.rs` | `multipart`-запит до Groq (`/openai/v1/audio/transcriptions`), повертає текст. |
 | `paste.rs` | Копіювання в буфер (`arboard`) та емуляція `Ctrl+V` (`enigo`). |
 | `autostart.rs` | Автозапуск через реєстр `HKCU\...\Run` (тільки Windows, через `reg.exe`). |
+| `stats.rs` | Лічильники використання Groq (`stats.json`): запити, слова, аудіо, денний лічильник по UTC-добі. |
 
 ## Потоки та події
 
