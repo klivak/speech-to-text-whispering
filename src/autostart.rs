@@ -5,53 +5,55 @@
 //! поточний шлях до `whisper-uk.exe` і не залежить від ярликів, які легко
 //! ламаються при переміщенні файлу.
 //!
-//! Реалізовано через `reg.exe` (без зайвих залежностей). Тільки Windows.
+//! Реалізовано через прямий доступ до реєстру (winreg), а не через запуск
+//! `reg.exe`: безконсольний застосунок не завжди може запустити консольну
+//! утиліту (помилка 0xc0000142 — STATUS_DLL_INIT_FAILED). Тільки Windows.
 
 #![cfg(windows)]
 
-const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+use winreg::RegKey;
+
+const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const VALUE_NAME: &str = "whisper-uk";
 
-/// Чи увімкнено автозапуск (чи є наш запис у Run і чи вказує він на цей exe).
+/// Поточний шлях до exe у лапках (надійно для шляхів із пробілами).
+fn exe_value() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    Ok(format!("\"{}\"", exe.to_string_lossy()))
+}
+
+/// Чи увімкнено автозапуск (чи є наш запис у Run).
 pub fn is_enabled() -> bool {
-    let output = std::process::Command::new("reg")
-        .args(["query", RUN_KEY, "/v", VALUE_NAME])
-        .output();
-    match output {
-        Ok(o) => o.status.success(),
-        Err(_) => false,
-    }
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let Ok(run) = hkcu.open_subkey_with_flags(RUN_KEY, KEY_READ) else {
+        return false;
+    };
+    run.get_value::<String, _>(VALUE_NAME).is_ok()
 }
 
 /// Вмикає автозапуск: прописує поточний шлях до exe в Run.
 pub fn enable() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let exe = exe.to_string_lossy().to_string();
-    // reg сам обгортає значення; передаємо шлях у лапках для надійності з пробілами.
-    let value = format!("\"{exe}\"");
-    let status = std::process::Command::new("reg")
-        .args([
-            "add", RUN_KEY, "/v", VALUE_NAME, "/t", "REG_SZ", "/d", &value, "/f",
-        ])
-        .status()
-        .map_err(|e| format!("reg add: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("reg add повернув помилку".to_string())
-    }
+    let value = exe_value()?;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (run, _) = hkcu
+        .create_subkey_with_flags(RUN_KEY, KEY_WRITE)
+        .map_err(|e| format!("open Run key: {e}"))?;
+    run.set_value(VALUE_NAME, &value)
+        .map_err(|e| format!("set value: {e}"))
 }
 
 /// Вимикає автозапуск: видаляє наш запис із Run.
 pub fn disable() -> Result<(), String> {
-    let status = std::process::Command::new("reg")
-        .args(["delete", RUN_KEY, "/v", VALUE_NAME, "/f"])
-        .status()
-        .map_err(|e| format!("reg delete: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("reg delete повернув помилку".to_string())
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let run = hkcu
+        .open_subkey_with_flags(RUN_KEY, KEY_WRITE)
+        .map_err(|e| format!("open Run key: {e}"))?;
+    match run.delete_value(VALUE_NAME) {
+        Ok(()) => Ok(()),
+        // Значення вже відсутнє — вважаємо успіхом.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("delete value: {e}")),
     }
 }
 

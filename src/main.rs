@@ -392,31 +392,39 @@ fn tooltip(state: State, cfg: &Config) -> String {
 
 /// Відкриває файл/шлях у застосунку за замовчуванням.
 fn open_path(path: &Path) {
-    let p = path.to_string_lossy().to_string();
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("cmd")
-            .args(["/C", "start", "", &p])
-            .spawn();
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = std::process::Command::new("xdg-open").arg(&p).spawn();
-    }
+    open_target(&path.to_string_lossy());
 }
 
 /// Відкриває URL у браузері за замовчуванням.
 fn open_url(url: &str) {
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn();
+    open_target(url);
+}
+
+/// Відкриває файл або URL засобами ОС.
+#[cfg(windows)]
+fn open_target(target: &str) {
+    use windows::core::{HSTRING, PCWSTR};
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let op = HSTRING::from("open");
+    let file = HSTRING::from(target);
+    // ShellExecuteW сам обирає застосунок за замовчуванням; не запускає cmd.exe.
+    unsafe {
+        ShellExecuteW(
+            None,
+            &op,
+            &file,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
     }
-    #[cfg(not(windows))]
-    {
-        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
-    }
+}
+
+/// Відкриває файл або URL засобами ОС.
+#[cfg(not(windows))]
+fn open_target(target: &str) {
+    let _ = std::process::Command::new("xdg-open").arg(target).spawn();
 }
 
 /// Набір однотонних іконок трея для різних станів.

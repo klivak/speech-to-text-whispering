@@ -1,6 +1,6 @@
 [package]
 name = "whisper-uk"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Мінімальний голосовий ввід українською (Groq Whisper) зі вставкою в курсор"
 
@@ -20,6 +20,16 @@ enigo = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+# Відкриття файлів/URL напряму через ShellExecuteW, без запуску cmd.exe
+# (уникаємо помилок запуску консольних утиліт і блимання консолі).
+windows = { version = "0.58", features = [
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+] }
 
 [profile.release]
 opt-level = "z"
