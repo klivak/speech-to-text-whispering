@@ -1,0 +1,44 @@
+name: Release
+
+# Запускається при push тега виду v* (напр. v0.1.0).
+# Збирає Windows .exe і публікує GitHub Release з ним.
+# Автентифікація — вбудований GITHUB_TOKEN, локальний gh auth не потрібен.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/whisper-uk.exe
+          generate_release_notes: true
+          body: |
+            Голосовий ввід українською через Groq `whisper-large-v3`.
+
+            **Як користуватись:**
+            1. Завантаж `whisper-uk.exe` нижче і запусти.
+            2. Меню трея → «Як отримати ключ Groq…» → створи безкоштовний ключ.
+            3. Меню трея → «Відкрити config.json» → встав ключ → «Перезавантажити конфіг».
+            4. Курсор у поле → хоткей `Ctrl+Alt+Space` → говори → текст вставиться.
+
+            Деталі — у [README](https://github.com/klivak/speech-to-text-whispering#readme).

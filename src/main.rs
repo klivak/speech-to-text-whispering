@@ -12,9 +12,9 @@
 // Ховаємо консольне вікно у release-збірці (у debug лишаємо для логів).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod audio;
 #[cfg(windows)]
 mod autostart;
-mod audio;
 mod config;
 mod groq;
 mod hotkey;
@@ -55,7 +55,9 @@ fn main() {
     let hk_manager = GlobalHotKeyManager::new().expect("GlobalHotKeyManager");
     let mut current_hotkey =
         hotkey::parse(&cfg.hotkey).unwrap_or_else(|e| panic!("Хибний хоткей: {e}"));
-    hk_manager.register(current_hotkey).expect("register hotkey");
+    hk_manager
+        .register(current_hotkey)
+        .expect("register hotkey");
 
     // --- Меню трея ---
     let menu = Menu::new();
@@ -68,12 +70,8 @@ fn main() {
         None,
     );
     #[cfg(windows)]
-    let autostart_item = CheckMenuItem::new(
-        "Запускати з Windows",
-        true,
-        autostart::is_enabled(),
-        None,
-    );
+    let autostart_item =
+        CheckMenuItem::new("Запускати з Windows", true, autostart::is_enabled(), None);
     let get_key = MenuItem::new("Як отримати ключ Groq…", true, None);
     let open_cfg = MenuItem::new("Відкрити config.json", true, None);
     let reload_cfg = MenuItem::new("Перезавантажити конфіг", true, None);
@@ -89,11 +87,8 @@ fn main() {
     .expect("build menu");
     #[cfg(windows)]
     menu.append(&autostart_item).expect("autostart item");
-    menu.append_items(&[
-        &PredefinedMenuItem::separator(),
-        &quit,
-    ])
-    .expect("build menu");
+    menu.append_items(&[&PredefinedMenuItem::separator(), &quit])
+        .expect("build menu");
 
     let icons = Icons::new();
     let tray = TrayIconBuilder::new()
@@ -179,8 +174,7 @@ fn main() {
                                             }
                                             Ok(text)
                                         });
-                                        let _ =
-                                            proxy.send_event(UserEvent::TranscribeDone(res));
+                                        let _ = proxy.send_event(UserEvent::TranscribeDone(res));
                                     });
                                 }
                                 Err(e) => {
@@ -328,10 +322,10 @@ struct Icons {
 impl Icons {
     fn new() -> Self {
         Self {
-            idle: solid_icon(120, 120, 120),         // сірий — очікує
-            recording: solid_icon(220, 40, 40),      // червоний — запис
-            transcribing: solid_icon(230, 180, 30),  // жовтий — розпізнавання
-            error: solid_icon(150, 30, 160),         // фіолетовий — помилка
+            idle: solid_icon(120, 120, 120),        // сірий — очікує
+            recording: solid_icon(220, 40, 40),     // червоний — запис
+            transcribing: solid_icon(230, 180, 30), // жовтий — розпізнавання
+            error: solid_icon(150, 30, 160),        // фіолетовий — помилка
         }
     }
 }

@@ -109,11 +109,13 @@ fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, String> {
     };
     let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
     {
-        let mut writer = hound::WavWriter::new(&mut cursor, spec)
-            .map_err(|e| format!("WavWriter: {e}"))?;
+        let mut writer =
+            hound::WavWriter::new(&mut cursor, spec).map_err(|e| format!("WavWriter: {e}"))?;
         for &s in samples {
             let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-            writer.write_sample(v).map_err(|e| format!("write_sample: {e}"))?;
+            writer
+                .write_sample(v)
+                .map_err(|e| format!("write_sample: {e}"))?;
         }
         writer.finalize().map_err(|e| format!("finalize: {e}"))?;
     }
