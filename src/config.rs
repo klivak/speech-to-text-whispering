@@ -44,6 +44,17 @@ pub struct Config {
     pub mode: HotkeyMode,
     /// Автоматично вставляти текст у курсор (Ctrl+V) після транскрипції.
     pub auto_paste: bool,
+    /// Короткий звуковий біп на старт/кінець запису.
+    #[serde(default = "default_true")]
+    pub sound_feedback: bool,
+    /// Показувати кругле кольорове коло по центру екрана під час запису/обробки.
+    #[serde(default = "default_true")]
+    pub show_overlay: bool,
+}
+
+/// Дефолт для булевих полів, які мають бути увімкнені (для `serde(default)`).
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -56,6 +67,8 @@ impl Default for Config {
             hotkey: "Ctrl+Alt+Space".to_string(),
             mode: HotkeyMode::Toggle,
             auto_paste: true,
+            sound_feedback: true,
+            show_overlay: true,
         }
     }
 }

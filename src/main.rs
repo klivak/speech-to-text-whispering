@@ -16,8 +16,11 @@ mod audio;
 #[cfg(windows)]
 mod autostart;
 mod config;
+mod feedback;
 mod groq;
 mod hotkey;
+#[cfg(windows)]
+mod overlay;
 mod paste;
 mod stats;
 
@@ -111,6 +114,9 @@ fn main() {
         None,
     );
 
+    let sound_item = CheckMenuItem::new("Звук при записі", true, cfg.sound_feedback, None);
+    let overlay_item = CheckMenuItem::new("Індикатор на екрані", true, cfg.show_overlay, None);
+
     let stats_summary = MenuItem::new(usage.summary(), false, None);
     let limits_summary = MenuItem::new(usage.limits_summary(), false, None);
     let open_limits = MenuItem::new("Ліміти Groq (онлайн)…", true, None);
@@ -130,6 +136,8 @@ fn main() {
         &hotkey_menu,
         &mode_toggle,
         &mode_ptt,
+        &sound_item,
+        &overlay_item,
         &PredefinedMenuItem::separator(),
         &stats_summary,
         &limits_summary,
@@ -181,6 +189,10 @@ fn main() {
     // Тримаємо tray живим увесь час роботи циклу (дроп ховає іконку).
     let keep_tray = tray;
 
+    // Екранний індикатор (кольорове коло по центру). Лише Windows.
+    #[cfg(windows)]
+    let overlay = overlay::Overlay::spawn();
+
     let mut state = State::Idle;
     let mut recording: Option<Recording> = None;
 
@@ -213,6 +225,13 @@ fn main() {
 
                     if should_stop {
                         if let Some(rec) = recording.take() {
+                            if cfg.sound_feedback {
+                                feedback::play_stop();
+                            }
+                            #[cfg(windows)]
+                            if cfg.show_overlay {
+                                overlay.transcribing();
+                            }
                             state = State::Transcribing;
                             set_state(&keep_tray, &icons, state, &cfg);
                             match rec.stop_to_wav() {
@@ -225,13 +244,12 @@ fn main() {
                                                 let res = if text.is_empty() {
                                                     Ok(text)
                                                 } else {
-                                                    paste::copy_to_clipboard(&text)
-                                                        .and_then(|()| {
-                                                            if cfg2.auto_paste {
-                                                                paste::paste_at_cursor()?;
-                                                            }
-                                                            Ok(text)
-                                                        })
+                                                    paste::copy_to_clipboard(&text).and_then(|()| {
+                                                        if cfg2.auto_paste {
+                                                            paste::paste_at_cursor()?;
+                                                        }
+                                                        Ok(text)
+                                                    })
                                                 };
                                                 (res, limits)
                                             }
@@ -246,6 +264,8 @@ fn main() {
                                 }
                                 Err(e) => {
                                     eprintln!("Кодування WAV: {e}");
+                                    #[cfg(windows)]
+                                    overlay.hide();
                                     state = State::Error;
                                     set_state(&keep_tray, &icons, state, &cfg);
                                 }
@@ -254,12 +274,21 @@ fn main() {
                     } else if should_start {
                         match Recording::start() {
                             Ok(rec) => {
+                                if cfg.sound_feedback {
+                                    feedback::play_start();
+                                }
+                                #[cfg(windows)]
+                                if cfg.show_overlay {
+                                    overlay.recording();
+                                }
                                 recording = Some(rec);
                                 state = State::Recording;
                                 set_state(&keep_tray, &icons, state, &cfg);
                             }
                             Err(e) => {
                                 eprintln!("Старт запису: {e}");
+                                #[cfg(windows)]
+                                overlay.hide();
                                 state = State::Error;
                                 set_state(&keep_tray, &icons, state, &cfg);
                             }
@@ -282,6 +311,8 @@ fn main() {
                             state = State::Error;
                         }
                     }
+                    #[cfg(windows)]
+                    overlay.hide();
                     // Оновлюємо статистику й залишок лімітів.
                     usage.record(&result, audio_ms, &limits);
                     usage.save();
@@ -349,6 +380,18 @@ fn main() {
                         cfg.save();
                         action_hint.set_text(action_hint_text(&cfg));
                         set_state(&keep_tray, &icons, state, &cfg);
+                    } else if id == *sound_item.id() {
+                        cfg.sound_feedback = !cfg.sound_feedback;
+                        sound_item.set_checked(cfg.sound_feedback);
+                        cfg.save();
+                    } else if id == *overlay_item.id() {
+                        cfg.show_overlay = !cfg.show_overlay;
+                        overlay_item.set_checked(cfg.show_overlay);
+                        #[cfg(windows)]
+                        if !cfg.show_overlay {
+                            overlay.hide();
+                        }
+                        cfg.save();
                     } else if id == *open_limits.id() {
                         open_url("https://console.groq.com/settings/limits");
                     } else if id == *open_stats.id() {
@@ -371,6 +414,8 @@ fn main() {
                         cfg = new_cfg;
                         mode_toggle.set_checked(cfg.mode == HotkeyMode::Toggle);
                         mode_ptt.set_checked(cfg.mode == HotkeyMode::PushToTalk);
+                        sound_item.set_checked(cfg.sound_feedback);
+                        overlay_item.set_checked(cfg.show_overlay);
                         sync_hotkey_checks(&hotkey_items, &cfg.hotkey);
                         action_hint.set_text(action_hint_text(&cfg));
                         state = State::Idle;

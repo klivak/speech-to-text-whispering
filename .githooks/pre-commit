@@ -1,0 +1,21 @@
+#!/bin/sh
+# Auto-format staged Rust files with rustfmt before committing.
+# Enable once with: git config core.hooksPath .githooks
+
+# Collect staged .rs files (Added/Copied/Modified/Renamed), skip deletions.
+staged_rs=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.rs$')
+
+[ -z "$staged_rs" ] && exit 0
+
+# Format the whole crate (cheap, incremental) so module layout doesn't matter.
+if ! cargo fmt; then
+    echo "pre-commit: 'cargo fmt' failed — aborting commit." >&2
+    exit 1
+fi
+
+# Re-stage any files that rustfmt changed.
+echo "$staged_rs" | while IFS= read -r f; do
+    [ -f "$f" ] && git add -- "$f"
+done
+
+exit 0
