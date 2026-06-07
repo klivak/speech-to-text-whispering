@@ -2,6 +2,14 @@
 
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
+/// Клавіша «V» для Ctrl+V. На Windows шлемо віртуальний код VK_V (0x56) —
+/// він не залежить від активної розкладки (інакше на кирилиці `Key::Unicode('v')`
+/// падає: латинської 'v' у розкладці немає). На інших ОС лишаємо Unicode.
+#[cfg(target_os = "windows")]
+const KEY_V: Key = Key::Other(0x56);
+#[cfg(not(target_os = "windows"))]
+const KEY_V: Key = Key::Unicode('v');
+
 /// Копіює текст у буфер обміну.
 pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard: {e}"))?;
@@ -19,7 +27,7 @@ pub fn paste_at_cursor() -> Result<(), String> {
         .key(Key::Control, Direction::Press)
         .map_err(|e| format!("ctrl down: {e}"))?;
     enigo
-        .key(Key::Unicode('v'), Direction::Click)
+        .key(KEY_V, Direction::Click)
         .map_err(|e| format!("v: {e}"))?;
     enigo
         .key(Key::Control, Direction::Release)

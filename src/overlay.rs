@@ -9,7 +9,8 @@
 #![cfg(windows)]
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
+use std::time::Instant;
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
@@ -51,6 +52,9 @@ static TARGET: AtomicU8 = AtomicU8::new(ST_HIDE);
 static FADE: AtomicU32 = AtomicU32::new(0);
 /// Чи крутиться таймер анімації (щоб не запускати його двічі).
 static RUNNING: AtomicBool = AtomicBool::new(false);
+/// Момент старту запису — для відліку реального часу запису в центрі кола.
+/// `Some` лише поки триває запис (не під час розпізнавання).
+static REC_START: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Хендл для керування індикатором із головного потоку.
 pub struct Overlay {
@@ -146,6 +150,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     PHASE.store(0, Ordering::Relaxed);
                 }
                 STATE.store(code, Ordering::Relaxed);
+                // Таймер відліку йде лише під час запису; на розпізнаванні — стоп.
+                if let Ok(mut g) = REC_START.lock() {
+                    *g = if code == ST_RECORDING {
+                        Some(Instant::now())
+                    } else {
+                        None
+                    };
+                }
                 redraw(hwnd);
                 let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             }
@@ -226,8 +238,19 @@ unsafe fn redraw(hwnd: HWND) {
     let old = SelectObject(hdc_mem, HGDIOBJ(hbmp.0));
 
     let fade = FADE.load(Ordering::Relaxed) as f32 / 1000.0;
+    // Скільки секунд триває запис (-1 = таймер не показуємо).
+    let secs: i32 = if state == ST_RECORDING {
+        REC_START
+            .lock()
+            .ok()
+            .and_then(|g| *g)
+            .map(|t| t.elapsed().as_secs() as i32)
+            .unwrap_or(-1)
+    } else {
+        -1
+    };
     let px = std::slice::from_raw_parts_mut(bits as *mut u32, (SIZE_PX * SIZE_PX) as usize);
-    draw(px, state, phase, fade);
+    draw(px, state, phase, fade, secs);
 
     // Центр первинного монітора.
     let sw = GetSystemMetrics(SM_CXSCREEN);
@@ -266,7 +289,7 @@ unsafe fn redraw(hwnd: HWND) {
 }
 
 /// Малює радіальне кільце з пульсацією у буфер премультиплікованого BGRA.
-fn draw(px: &mut [u32], state: u8, phase: f32, fade: f32) {
+fn draw(px: &mut [u32], state: u8, phase: f32, fade: f32, secs: i32) {
     let s = SIZE_PX as f32;
     let c = s / 2.0;
     let radius = c - 6.0;
@@ -329,6 +352,137 @@ fn draw(px: &mut [u32], state: u8, phase: f32, fade: f32) {
             let g8 = (g * alpha) as u32;
             let b8 = (b * alpha) as u32;
             px[(y * SIZE_PX + x) as usize] = (a8 << 24) | (r8 << 16) | (g8 << 8) | b8;
+        }
+    }
+
+    // Таймер M:SS у центрі (лише під час реального запису).
+    if secs >= 0 {
+        draw_timer(px, secs, fade * (0.7 + 0.3 * pulse));
+    }
+}
+
+/// Малює час M:SS семисегментними цифрами по центру кола.
+fn draw_timer(px: &mut [u32], secs: i32, alpha: f32) {
+    let m = (secs / 60).min(9); // хвилини 0..9 (довше навряд чи)
+    let ss = secs % 60;
+    let glyphs = [m, -1 /* двокрапка */, ss / 10, ss % 10];
+
+    // Геометрія цифр.
+    let dw = 22_i32;
+    let dh = 42_i32;
+    let t = 5_i32;
+    let gap = 8_i32;
+    let colon_w = 10_i32;
+
+    // Повна ширина рядка для центрування.
+    let mut total = 0;
+    for g in glyphs {
+        total += if g == -1 { colon_w } else { dw } + gap;
+    }
+    total -= gap;
+
+    let mut x = SIZE_PX / 2 - total / 2;
+    let y0 = SIZE_PX / 2 - dh / 2;
+    // Світлий бірюзовий колір для контрасту з кільцем.
+    let color = (210u32, 245, 255);
+
+    for g in glyphs {
+        if g == -1 {
+            // Двокрапка: дві крапки.
+            fill_rect(px, x + colon_w / 2 - t / 2, y0 + dh / 3, t, t, color, alpha);
+            fill_rect(
+                px,
+                x + colon_w / 2 - t / 2,
+                y0 + 2 * dh / 3,
+                t,
+                t,
+                color,
+                alpha,
+            );
+            x += colon_w + gap;
+        } else {
+            draw_digit(px, x, y0, dw, dh, t, g as usize, color, alpha);
+            x += dw + gap;
+        }
+    }
+}
+
+/// Малює одну семисегментну цифру в прямокутнику (x0,y0,dw,dh).
+#[allow(clippy::too_many_arguments)]
+fn draw_digit(
+    px: &mut [u32],
+    x0: i32,
+    y0: i32,
+    dw: i32,
+    dh: i32,
+    t: i32,
+    digit: usize,
+    color: (u32, u32, u32),
+    alpha: f32,
+) {
+    // Маски сегментів [a,b,c,d,e,f,g] для цифр 0..9.
+    const SEG: [[bool; 7]; 10] = [
+        [true, true, true, true, true, true, false],     // 0
+        [false, true, true, false, false, false, false], // 1
+        [true, true, false, true, true, false, true],    // 2
+        [true, true, true, true, false, false, true],    // 3
+        [false, true, true, false, false, true, true],   // 4
+        [true, false, true, true, false, true, true],    // 5
+        [true, false, true, true, true, true, true],     // 6
+        [true, true, true, false, false, false, false],  // 7
+        [true, true, true, true, true, true, true],      // 8
+        [true, true, true, true, false, true, true],     // 9
+    ];
+    let s = SEG[digit % 10];
+    let mid = y0 + dh / 2;
+    // a — верх
+    if s[0] {
+        fill_rect(px, x0 + t, y0, dw - 2 * t, t, color, alpha);
+    }
+    // b — правий верхній
+    if s[1] {
+        fill_rect(px, x0 + dw - t, y0 + t, t, mid - (y0 + t), color, alpha);
+    }
+    // c — правий нижній
+    if s[2] {
+        fill_rect(px, x0 + dw - t, mid, t, (y0 + dh - t) - mid, color, alpha);
+    }
+    // d — низ
+    if s[3] {
+        fill_rect(px, x0 + t, y0 + dh - t, dw - 2 * t, t, color, alpha);
+    }
+    // e — лівий нижній
+    if s[4] {
+        fill_rect(px, x0, mid, t, (y0 + dh - t) - mid, color, alpha);
+    }
+    // f — лівий верхній
+    if s[5] {
+        fill_rect(px, x0, y0 + t, t, mid - (y0 + t), color, alpha);
+    }
+    // g — середина
+    if s[6] {
+        fill_rect(px, x0 + t, mid - t / 2, dw - 2 * t, t, color, alpha);
+    }
+}
+
+/// Заливає прямокутник кольором із заданою альфою (премультиплікація BGRA).
+fn fill_rect(px: &mut [u32], x: i32, y: i32, w: i32, h: i32, color: (u32, u32, u32), alpha: f32) {
+    let a = alpha.clamp(0.0, 1.0);
+    let (r, g, b) = color;
+    let a8 = (a * 255.0) as u32;
+    let r8 = (r as f32 * a) as u32;
+    let g8 = (g as f32 * a) as u32;
+    let b8 = (b as f32 * a) as u32;
+    let packed = (a8 << 24) | (r8 << 16) | (g8 << 8) | b8;
+    for yy in y..(y + h) {
+        if yy < 0 || yy >= SIZE_PX {
+            continue;
+        }
+        for xx in x..(x + w) {
+            if xx < 0 || xx >= SIZE_PX {
+                continue;
+            }
+            px[(yy * SIZE_PX + xx) as usize] = packed;
         }
     }
 }

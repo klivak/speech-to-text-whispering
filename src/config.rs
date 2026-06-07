@@ -50,11 +50,20 @@ pub struct Config {
     /// Показувати кругле кольорове коло по центру екрана під час запису/обробки.
     #[serde(default = "default_true")]
     pub show_overlay: bool,
+    /// Скільки мс дозаписувати «хвіст» після відпускання клавіші (push-to-talk),
+    /// щоб не зрізати кінець слова. 0 = зупиняти миттєво.
+    #[serde(default = "default_release_tail")]
+    pub release_tail_ms: u64,
 }
 
 /// Дефолт для булевих полів, які мають бути увімкнені (для `serde(default)`).
 fn default_true() -> bool {
     true
+}
+
+/// Дефолтний «хвіст» дозапису після відпускання клавіші.
+fn default_release_tail() -> u64 {
+    400
 }
 
 impl Default for Config {
@@ -69,6 +78,7 @@ impl Default for Config {
             auto_paste: true,
             sound_feedback: true,
             show_overlay: true,
+            release_tail_ms: 400,
         }
     }
 }

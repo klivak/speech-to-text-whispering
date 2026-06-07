@@ -119,6 +119,8 @@ fn main() {
 
     let stats_summary = MenuItem::new(usage.summary(), false, None);
     let limits_summary = MenuItem::new(usage.limits_summary(), false, None);
+    // Останній текст помилки від Groq (для діагностики; оновлюється при збої).
+    let error_item = MenuItem::new("Помилок ще не було", false, None);
     let open_limits = MenuItem::new("Ліміти Groq (онлайн)…", true, None);
     let open_stats = MenuItem::new("Відкрити статистику", true, None);
 
@@ -141,6 +143,7 @@ fn main() {
         &PredefinedMenuItem::separator(),
         &stats_summary,
         &limits_summary,
+        &error_item,
         &open_limits,
         &open_stats,
         &PredefinedMenuItem::separator(),
@@ -225,6 +228,13 @@ fn main() {
 
                     if should_stop {
                         if let Some(rec) = recording.take() {
+                            // Дозаписуємо «хвіст» після відпускання, щоб не зрізати
+                            // кінець слова (актуально для push-to-talk). Стрім cpal
+                            // увесь час паузи продовжує захоплювати звук.
+                            if cfg.mode == HotkeyMode::PushToTalk && cfg.release_tail_ms > 0 {
+                                let tail = cfg.release_tail_ms.min(2000);
+                                std::thread::sleep(std::time::Duration::from_millis(tail));
+                            }
                             if cfg.sound_feedback {
                                 feedback::play_stop();
                             }
@@ -308,6 +318,8 @@ fn main() {
                         }
                         Err(e) => {
                             eprintln!("Транскрипція: {e}");
+                            // Показуємо реальну причину в меню (обрізаємо, щоб не розпухало).
+                            error_item.set_text(format!("⚠ {}", truncate(e, 120)));
                             state = State::Error;
                         }
                     }
@@ -319,6 +331,11 @@ fn main() {
                     stats_summary.set_text(usage.summary());
                     limits_summary.set_text(usage.limits_summary());
                     set_state(&keep_tray, &icons, state, &cfg);
+                    // На помилці у tooltip додаємо короткий текст причини.
+                    if let Err(e) = &result {
+                        let _ = keep_tray
+                            .set_tooltip(Some(format!("whisper-uk — ⚠ {}", truncate(e, 100))));
+                    }
                 }
 
                 UserEvent::Menu(id) => {
@@ -425,6 +442,16 @@ fn main() {
             }
         }
     });
+}
+
+/// Обрізає рядок до n символів (по межі символів), додаючи «…» за потреби.
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(n).collect();
+        format!("{cut}…")
+    }
 }
 
 /// Рядок-підказка: дієслово (натисни/тримай) + поточний хоткей.
