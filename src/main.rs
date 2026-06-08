@@ -18,6 +18,7 @@ mod autostart;
 mod config;
 mod feedback;
 mod groq;
+mod history;
 mod hotkey;
 #[cfg(windows)]
 mod overlay;
@@ -116,6 +117,10 @@ fn main() {
 
     let sound_item = CheckMenuItem::new("Звук при записі", true, cfg.sound_feedback, None);
     let overlay_item = CheckMenuItem::new("Індикатор на екрані", true, cfg.show_overlay, None);
+    let paste_item = CheckMenuItem::new("Вставляти в курсор", true, cfg.auto_paste, None);
+    let copy_item = CheckMenuItem::new("Копіювати в буфер", true, cfg.auto_copy, None);
+    let history_item = CheckMenuItem::new("Зберігати історію", true, cfg.save_history, None);
+    let open_history = MenuItem::new("Відкрити історію", true, None);
 
     let stats_summary = MenuItem::new(usage.summary(), false, None);
     let limits_summary = MenuItem::new(usage.limits_summary(), false, None);
@@ -138,8 +143,12 @@ fn main() {
         &hotkey_menu,
         &mode_toggle,
         &mode_ptt,
+        &paste_item,
+        &copy_item,
         &sound_item,
         &overlay_item,
+        &history_item,
+        &open_history,
         &PredefinedMenuItem::separator(),
         &stats_summary,
         &limits_summary,
@@ -254,12 +263,29 @@ fn main() {
                                                 let res = if text.is_empty() {
                                                     Ok(text)
                                                 } else {
-                                                    paste::copy_to_clipboard(&text).and_then(|()| {
-                                                        if cfg2.auto_paste {
-                                                            paste::paste_at_cursor()?;
-                                                        }
-                                                        Ok(text)
-                                                    })
+                                                    // Історію зберігаємо першою — вона не залежить
+                                                    // від буфера/вставки й має лишитись навіть якщо
+                                                    // вони зірвуться.
+                                                    if cfg2.save_history {
+                                                        history::append(&text);
+                                                    }
+                                                    // Копіюємо в буфер, якщо ввімкнено авто-копію
+                                                    // АБО автовставку (вставка читає саме з буфера).
+                                                    // Так навіть при зірваній вставці (фокус
+                                                    // перехопило вікно) текст лишається в буфері.
+                                                    let res = if cfg2.auto_copy || cfg2.auto_paste {
+                                                        paste::copy_to_clipboard(&text).and_then(
+                                                            |()| {
+                                                                if cfg2.auto_paste {
+                                                                    paste::paste_at_cursor()?;
+                                                                }
+                                                                Ok(())
+                                                            },
+                                                        )
+                                                    } else {
+                                                        Ok(())
+                                                    };
+                                                    res.map(|()| text)
                                                 };
                                                 (res, limits)
                                             }
@@ -409,6 +435,29 @@ fn main() {
                             overlay.hide();
                         }
                         cfg.save();
+                    } else if id == *paste_item.id() {
+                        cfg.auto_paste = !cfg.auto_paste;
+                        paste_item.set_checked(cfg.auto_paste);
+                        cfg.save();
+                    } else if id == *copy_item.id() {
+                        cfg.auto_copy = !cfg.auto_copy;
+                        copy_item.set_checked(cfg.auto_copy);
+                        cfg.save();
+                    } else if id == *history_item.id() {
+                        cfg.save_history = !cfg.save_history;
+                        history_item.set_checked(cfg.save_history);
+                        cfg.save();
+                    } else if id == *open_history.id() {
+                        let path = history::path();
+                        if !path.exists() {
+                            // Файл зʼявляється лише після першого запису — створимо
+                            // порожній, щоб «Відкрити» не падало в нікуди.
+                            if let Some(parent) = path.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            let _ = std::fs::write(&path, "");
+                        }
+                        open_path(&path);
                     } else if id == *open_limits.id() {
                         open_url("https://console.groq.com/settings/limits");
                     } else if id == *open_stats.id() {
@@ -433,6 +482,9 @@ fn main() {
                         mode_ptt.set_checked(cfg.mode == HotkeyMode::PushToTalk);
                         sound_item.set_checked(cfg.sound_feedback);
                         overlay_item.set_checked(cfg.show_overlay);
+                        paste_item.set_checked(cfg.auto_paste);
+                        copy_item.set_checked(cfg.auto_copy);
+                        history_item.set_checked(cfg.save_history);
                         sync_hotkey_checks(&hotkey_items, &cfg.hotkey);
                         action_hint.set_text(action_hint_text(&cfg));
                         state = State::Idle;

@@ -44,6 +44,14 @@ pub struct Config {
     pub mode: HotkeyMode,
     /// Автоматично вставляти текст у курсор (Ctrl+V) після транскрипції.
     pub auto_paste: bool,
+    /// Автоматично копіювати розпізнаний текст у буфер обміну. За замовчуванням
+    /// увімкнено — навіть якщо автовставка зірветься (бо фокус перехопило
+    /// повідомлення/інше вікно), текст лишиться в буфері й його можна вставити вручну.
+    #[serde(default = "default_true")]
+    pub auto_copy: bool,
+    /// Зберігати історію розпізнаного тексту у history.jsonl. За замовчуванням увімкнено.
+    #[serde(default = "default_true")]
+    pub save_history: bool,
     /// Короткий звуковий біп на старт/кінець запису.
     #[serde(default = "default_true")]
     pub sound_feedback: bool,
@@ -76,6 +84,8 @@ impl Default for Config {
             hotkey: "Ctrl+Alt+Space".to_string(),
             mode: HotkeyMode::Toggle,
             auto_paste: true,
+            auto_copy: true,
+            save_history: true,
             sound_feedback: true,
             show_overlay: true,
             release_tail_ms: 400,
